@@ -1,69 +1,32 @@
-# React + TypeScript + Vite
+cat > README.md <<'MD'
+# Preev Demo — PR Preview Environments (Free Tier)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Every Pull Request automatically gets a **live preview URL** built on Cloudflare Pages.  
+A **bot comment** posts the preview link on the PR. Close the PR and keep building — $0 infra.
 
-Currently, two official plugins are available:
+## How it works
+- Push a branch and open a PR → Cloudflare Pages builds a **Preview deployment** for that branch.
+- A GitHub workflow calls the Cloudflare API and **comments the Preview URL** on the PR.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Try it (2 steps)
+1. Create a new branch, change any text in `src/App.tsx`, and open a PR.
+2. Wait ~1–2 minutes. A bot comment appears with the **Preview URL**. Click it to view your changes live.
 
-## Expanding the ESLint configuration
+## Tech (all free tiers)
+- **Cloudflare Pages** for PR previews  
+- **GitHub Actions** for the PR comment
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Notes / Limits
+- First load of a fresh preview can be a little slow (build + cache warm-up).  
+- Multiple previews are fine; each PR gets its own unique URL.  
+- Uses platform subdomains (free TLS). No custom domain needed.
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Troubleshooting
+- **No PR comment?** Check the workflow run on the PR (Actions/Checks). Most issues are missing repo secrets:
+  - `CF_API_TOKEN` (Cloudflare token with Pages permission)
+  - `CF_ACCOUNT_ID` (your Cloudflare Account ID)
+  - `CF_PAGES_PROJECT` (your Pages project name/slug)
+- **Preview shows old page?** Make sure you’re opening the **Preview** URL (hashed subdomain), not the production URL.
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+---
+MD
