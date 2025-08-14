@@ -1,0 +1,20 @@
+name: Comment Cloudflare Pages Preview URL
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment Preview URL
+        uses: avneesh0612/comment-cloudflare-preview-url-on-pr@v1
+        with:
+          cloudflare_api_token: ${{ secrets.CF_API_TOKEN }}
+          account_id: ${{ secrets.CF_ACCOUNT_ID }}
+          project_name: ${{ secrets.CF_PAGES_PROJECT }}
