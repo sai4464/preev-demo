@@ -1,5 +1,3 @@
-import React from "react";
-
 function getParam(name: string) {
   const url = new URL(window.location.href);
   return url.searchParams.get(name) || "";
@@ -16,7 +14,6 @@ export default function ShareBar() {
       await navigator.clipboard.writeText(url);
       alert("Preview link copied!");
     } catch {
-      // Fallback
       const ta = document.createElement("textarea");
       ta.value = url;
       document.body.appendChild(ta);
