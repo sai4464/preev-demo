@@ -25,9 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments"
-          # fetch deployments
           RESP="$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" "$API")"
-          # pick newest PREVIEW for this branch
           URL="$(echo "$RESP" | jq -r --arg BRANCH "$BRANCH" '
             .result
             | map(select(.environment=="preview" and (.deployment_trigger.metadata.branch==$BRANCH)))
@@ -48,13 +46,15 @@ jobs:
         with:
           script: |
             const marker = "<!-- PREEV_PREVIEW_LINK -->";
+            const { owner, repo, number } = context.issue;
+            // Include repo/pr in the link so your page can show the banner
+            const urlWithParams = `${process.env.PREVIEW_URL}?repo=${owner}%2F${repo}&pr=${number}`;
             const body = `${marker}
             🚀 Preview is ready:
 
-            ${process.env.PREVIEW_URL}
+            ${urlWithParams}
 
             (Cloudflare Pages)`;
-            const { owner, repo, number } = context.issue;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
             const existing = comments.find(c => c.user?.type === "Bot" && c.body?.includes(marker));
             if (existing) {
