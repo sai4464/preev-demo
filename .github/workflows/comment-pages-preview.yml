@@ -1,4 +1,4 @@
-name: Cloudflare Debug Accounts & Projects
+name: Cloudflare Debug Verify
 
 on:
   pull_request:
@@ -14,33 +14,35 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Check secrets present
+        run: |
+          if [ -z "${{ secrets.CF_API_TOKEN }}" ]; then echo "CF_API_TOKEN is EMPTY"; exit 1; else echo "CF_API_TOKEN is set"; fi
+
       - name: Verify token
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: |
-          curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" \
-            https://api.cloudflare.com/client/v4/user/tokens/verify | jq .
+          curl -i -s -X GET \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            https://api.cloudflare.com/client/v4/user/tokens/verify | sed -e 's/^/VERIFY: /'
 
       - name: List accounts
-        id: accounts
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: |
-          ACCOUNTS_JSON=$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" \
-            https://api.cloudflare.com/client/v4/accounts)
-          echo "Accounts (ID  NAME):"
-          echo "$ACCOUNTS_JSON" | jq -r '.result[] | "\(.id)  \(.name)"'
-          echo "ids=$(echo "$ACCOUNTS_JSON" | jq -r '[.result[].id] | join(",")')" >> $GITHUB_OUTPUT
+          curl -i -s \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            https://api.cloudflare.com/client/v4/accounts | sed -e 's/^/ACCOUNTS: /'
 
-      - name: List Pages projects for each account
+      - name: List projects (if CF_ACCOUNT_ID set)
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          IDS: ${{ steps.accounts.outputs.ids }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          IFS=',' read -ra ARR <<< "$IDS"
-          for ID in "${ARR[@]}"; do
-            echo "---- Account $ID projects ----"
-            curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" \
-              "https://api.cloudflare.com/client/v4/accounts/${ID}/pages/projects" \
-              | jq -r '.result[]?.name'
-          done
+          if [ -z "${CF_ACCOUNT_ID}" ]; then
+            echo "No CF_ACCOUNT_ID secret set yet, skipping"
+            exit 0
+          fi
+          curl -i -s \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects" | sed -e 's/^/PROJECTS: /'
