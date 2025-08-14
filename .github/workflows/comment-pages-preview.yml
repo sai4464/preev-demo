@@ -8,37 +8,49 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   comment:
     runs-on: ubuntu-latest
     steps:
+      - name: Check required secrets
+        run: |
+          test -n "${{ secrets.CF_API_TOKEN }}" || (echo "Missing CF_API_TOKEN" && exit 1)
+          test -n "${{ secrets.CF_ACCOUNT_ID }}" || (echo "Missing CF_ACCOUNT_ID" && exit 1)
+          test -n "${{ secrets.CF_PAGES_PROJECT }}" || (echo "Missing CF_PAGES_PROJECT" && exit 1)
+
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get latest Preview URL for this PR branch
+      - name: Poll Cloudflare for preview URL (up to 6 min)
         id: cf
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_PAGES_PROJECT: ${{ secrets.CF_PAGES_PROJECT }}
-          BRANCH: ${{ github.head_ref }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments"
-          # fetch deployments
-          RESP="$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" "$API")"
-          # pick newest PREVIEW for this branch
-          URL="$(echo "$RESP" | jq -r --arg BRANCH "$BRANCH" '
-            .result
-            | map(select(.environment=="preview" and (.deployment_trigger.metadata.branch==$BRANCH)))
-            | sort_by(.created_on) | reverse | (.[0].url // empty)
-          ')"
-          echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
-          if [ -z "$URL" ]; then
-            echo "No preview found yet for branch $BRANCH"
-          else
-            echo "Preview URL: $URL"
-          fi
+          API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments?page=1&per_page=50"
+          PREVIEW_URL=""
+          for i in $(seq 1 24); do
+            RESP="$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" "$API" || true)"
+            PREVIEW_URL="$(echo "$RESP" | jq -r --arg BRANCH "$BRANCH" '
+              .result
+              | map(select(.environment=="preview" and (.deployment_trigger.metadata.branch==$BRANCH)))
+              | sort_by(.created_on) | reverse | (.[0].url // empty)
+            ')"
+            if [ -n "$PREVIEW_URL" ]; then
+              echo "Found preview: $PREVIEW_URL"
+              break
+            fi
+            echo "Preview not ready yet (branch=$BRANCH). Waiting 15s..."
+            sleep 15
+          done
+          echo "preview_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
 
       - name: Post/Update sticky PR comment
         if: steps.cf.outputs.preview_url != ''
@@ -48,13 +60,14 @@ jobs:
         with:
           script: |
             const marker = "<!-- PREEV_PREVIEW_LINK -->";
+            const { owner, repo, number } = context.issue;
+            const urlWithParams = `${process.env.PREVIEW_URL}?repo=${owner}%2F${repo}&pr=${number}`;
             const body = `${marker}
             🚀 Preview is ready:
 
-            ${process.env.PREVIEW_URL}
+            ${urlWithParams}
 
             (Cloudflare Pages)`;
-            const { owner, repo, number } = context.issue;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
             const existing = comments.find(c => c.user?.type === "Bot" && c.body?.includes(marker));
             if (existing) {
@@ -63,6 +76,6 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
             }
 
-      - name: Log if no preview yet
+      - name: No preview yet (give hint)
         if: steps.cf.outputs.preview_url == ''
-        run: echo "No preview URL yet — wait for Pages to finish building, then push again."
+        run: echo "No preview found. Wait for Pages to finish building, then push a new commit to retrigger."
