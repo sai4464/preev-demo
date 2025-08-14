@@ -1,12 +1,30 @@
-name: YAML Sanity
+name: Cloudflare Projects Debug
 
 on:
   pull_request:
     types: [opened, reopened, synchronize]
 
+permissions:
+  contents: read
+
 jobs:
-  sanity:
+  debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Echo
-        run: echo "YAML OK"
+      - name: Show configured IDs
+        run: |
+          echo "Account ID: ${{ secrets.CF_ACCOUNT_ID }}"
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: List Pages projects for this account
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects" \
+          | jq -r '.result[].name'
