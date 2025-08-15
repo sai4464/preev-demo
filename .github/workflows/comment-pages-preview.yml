@@ -8,37 +8,77 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   comment:
     runs-on: ubuntu-latest
     steps:
+      - name: Check required secrets
+        run: |
+          test -n "${{ secrets.CF_API_TOKEN }}" || (echo "Missing CF_API_TOKEN" && exit 1)
+          test -n "${{ secrets.CF_ACCOUNT_ID }}" || (echo "Missing CF_ACCOUNT_ID" && exit 1)
+          test -n "${{ secrets.CF_PAGES_PROJECT }}" || (echo "Missing CF_PAGES_PROJECT" && exit 1)
+
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get latest Preview URL for this PR branch
-        id: cf
+      - name: Resolve Pages project (case/whitespace safe)
+        id: proj
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_PAGES_PROJECT: ${{ secrets.CF_PAGES_PROJECT }}
-          BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments"
-          # fetch deployments
-          RESP="$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" "$API")"
-          # pick newest PREVIEW for this branch
-          URL="$(echo "$RESP" | jq -r --arg BRANCH "$BRANCH" '
-            .result
-            | map(select(.environment=="preview" and (.deployment_trigger.metadata.branch==$BRANCH)))
-            | sort_by(.created_on) | reverse | (.[0].url // empty)
-          ')"
-          echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
-          if [ -z "$URL" ]; then
-            echo "No preview found yet for branch $BRANCH"
-          else
-            echo "Preview URL: $URL"
+          WANT_RAW="$(printf "%s" "${CF_PAGES_PROJECT}" | tr -d ' \t\r\n')"
+          WANT_LC="$(printf "%s" "$WANT_RAW" | tr '[:upper:]' '[:lower:]')"
+          LIST="$(curl -fsSL -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects")"
+          NAME="$(echo "$LIST" | jq -r --arg w "$WANT_LC" '.result[] | select((.name|ascii_downcase)==$w) | .name' | head -n1)"
+          if [ -z "$NAME" ]; then
+            echo "Could not find Pages project named '${WANT_RAW}'. Available projects:" >&2
+            echo "$LIST" | jq -r '.result[].name' >&2
+            exit 1
           fi
+          echo "Resolved project: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Poll Cloudflare for preview URL (up to 6 min)
+        id: cf
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PROJECT: ${{ steps.proj.outputs.name }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 24); do
+            RESP="$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${PROJECT}/deployments")"
+            STATUS="$(printf "%s" "$RESP" | sed -n 's/^HTTP_STATUS://p')"
+            BODY="$(printf "%s" "$RESP" | sed '/^HTTP_STATUS:/d')"
+            if [ "$STATUS" = "200" ]; then
+              URL="$(printf "%s" "$BODY" | jq -r --arg BRANCH "$BRANCH" '
+                .result
+                | map(select(.environment=="preview" and (.deployment_trigger.metadata.branch==$BRANCH)))
+                | sort_by(.created_on) | reverse | (.[0].url // empty)
+              ')"
+              if [ -n "$URL" ]; then
+                echo "Found preview: $URL"
+                echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "200 OK but no preview yet for branch=$BRANCH. Waiting 15s..."
+            else
+              echo "Cloudflare API status $STATUS: $(printf "%s" "$BODY" | jq -c . 2>/dev/null || echo "$BODY")" >&2
+            fi
+            sleep 15
+          done
+          echo "preview_url=" >> "$GITHUB_OUTPUT"
 
       - name: Post/Update sticky PR comment
         if: steps.cf.outputs.preview_url != ''
@@ -48,13 +88,14 @@ jobs:
         with:
           script: |
             const marker = "<!-- PREEV_PREVIEW_LINK -->";
+            const { owner, repo, number } = context.issue;
+            const urlWithParams = `${process.env.PREVIEW_URL}?repo=${owner}%2F${repo}&pr=${number}`;
             const body = `${marker}
             🚀 Preview is ready:
 
-            ${process.env.PREVIEW_URL}
+            ${urlWithParams}
 
             (Cloudflare Pages)`;
-            const { owner, repo, number } = context.issue;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
             const existing = comments.find(c => c.user?.type === "Bot" && c.body?.includes(marker));
             if (existing) {
@@ -63,6 +104,6 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
             }
 
-      - name: Log if no preview yet
+      - name: No preview yet (hint)
         if: steps.cf.outputs.preview_url == ''
-        run: echo "No preview URL yet — wait for Pages to finish building, then push again."
+        run: echo "No preview found. Let Pages finish building, then push a new commit to retrigger."
